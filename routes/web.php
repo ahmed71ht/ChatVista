@@ -36,6 +36,10 @@ Route::middleware('auth')->group(function () {
     Route::get('/chat/{room:slug}/requests', [ChatController::class, 'manageRequests'])->name('chat.manage-requests');
     Route::post('/chat/{room:slug}/requests/{joinRequest}/{action}', [ChatController::class, 'handleRequest'])->name('chat.handle-request');
 
+    Route::get('/chat/{room:slug}/requests/check', [ChatController::class, 'checkRequests'])->name('chat.check-requests');
+
+    Route::get('/chat/{room:slug}/system-messages/check', [ChatController::class, 'checkSystemMessages']);
+
     // مغادرة الغرفة
     Route::post('/chat/{room}/leave', [ChatController::class, 'leaveRoom'])->name('chat.leave');
 

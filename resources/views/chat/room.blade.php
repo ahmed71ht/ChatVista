@@ -51,9 +51,9 @@
                             
                         <!-- رسالة نظامية -->
                         <div x-show="message.is_system" 
-                            class="message-system text-xs rounded-full px-4 py-1.5 text-center"
-                            :class="message.type === 'member_left' ? 'message-system-leave' : 'message-system-join'">
-                            <i class="fas ml-1" :class="message.type === 'member_left' ? 'fa-sign-out-alt' : 'fa-sign-in-alt'"></i>
+                           class="message-system text-xs rounded-full px-4 py-1.5 text-center"
+                           :class="message.type === 'member_left' ? 'message-system-leave' : (message.type === 'join_request' ? 'message-system-request' : 'message-system-join')">
+                            <i class="fas ml-1" :class="message.type === 'member_left' ? 'fa-sign-out-alt' : (message.type === 'join_request' ? 'fa-paper-plane' : 'fa-sign-in-alt')"></i>
                             <span x-text="message.content"></span>
                         </div>
                             
@@ -527,6 +527,17 @@
             background: rgba(0,0,0,0.2);
         }
 
+        .message-system-request {
+            background: linear-gradient(135deg, #e3f2fd, #bbdefb);
+            color: #1565c0;
+            border: 1px solid #90caf9;
+        }
+        .dark .message-system-request {
+            background: linear-gradient(135deg, #1a237e, #283593);
+            color: #90caf9;
+            border: 1px solid #3949ab;
+        }
+
         .margin-3 {
             margin: 3px;
         }
@@ -670,6 +681,7 @@ document.addEventListener('alpine:init', () => {
 
         // ===== دالة التهيئة =====
         init() {
+            this.startSystemMessagesPolling();
             sessionStorage.removeItem('seen_mentions_' + roomId);
             this.joinMessagesAdded.clear();
 
@@ -874,6 +886,63 @@ document.addEventListener('alpine:init', () => {
                             type: 'info' 
                         });
                     }
+                })
+                // ✅ مستمع طلب انضمام جديد (للمالك فقط - يظهر الرسالة + يحدث قائمة الطلبات)
+                .listen('.join.request.submitted', (e) => {
+                    // المالك يشوف رسالة الطلب
+                    if ({{ Auth::id() }} == {{ $room->creator_id }}) {
+                        this.systemMessages.push({
+                            id: 'system-request-' + Date.now(),
+                            user_id: null,
+                            content: `${e.userName} قدم طلب انضمام إلى غرفة ${e.roomName}`,
+                            created_at: new Date().toISOString(),
+                            is_system: true,
+                            type: 'join_request',
+                        });
+                        this.updateAllMessages();
+                        this.$nextTick(() => this.scrollToBottom());
+                    }
+                })
+                // ✅ مستمع نتيجة الطلب (للشخص اللي قدم)
+                .listen('.join.request.handled', (e) => {
+                    // إذا المستخدم الحالي هو اللي قدم الطلب
+                    if (e.userId == {{ Auth::id() }}) {
+                        if (e.status === 'approved') {
+                            // ✅ توجيه فوري للغرفة
+                            window.location.href = `/chat/${roomId}`;
+                        } else if (e.status === 'rejected') {
+                            // ✅ توجيه لصفحة الرفض
+                            window.location.href = `/chat/${roomId}`;
+                        }
+                    }
+                    
+                    // الكل يشوف رسالة الانضمام إذا تم القبول
+                    if (e.status === 'approved') {
+                        this.systemMessages.push({
+                            id: 'system-approved-' + Date.now(),
+                            user_id: null,
+                            content: `تم قبول دعوى الانضمام، انضم ${e.userName} إلى غرفة ${e.roomName}`,
+                            created_at: new Date().toISOString(),
+                            is_system: true,
+                            type: 'member_joined',
+                        });
+                        this.updateAllMessages();
+                        this.$nextTick(() => this.scrollToBottom());
+                        
+                        // إضافة العضو للقائمة
+                        if (!this.members.find(m => m.id === e.userId)) {
+                            this.members.push({
+                                id: e.userId,
+                                name: e.userName,
+                                last_read_at: new Date().toISOString(),
+                                animationClass: 'member-join'
+                            });
+                            setTimeout(() => {
+                                const member = this.members.find(m => m.id === e.userId);
+                                if (member) member.animationClass = '';
+                            }, 600);
+                        }
+                    }
                 });
             
             window.Echo.channel('rooms')
@@ -907,6 +976,36 @@ document.addEventListener('alpine:init', () => {
                     _token: '{{ csrf_token() }}'
                 }));
             });
+        },
+
+        // ✅ Polling للرسائل النظامية الجديدة كل 5 ثواني
+        startSystemMessagesPolling() {
+            this.pollingTimer = setInterval(async () => {
+                try {
+                    const response = await fetch(`/chat/${roomId}/system-messages/check`, {
+                        headers: {
+                            'Accept': 'application/json',
+                            'X-CSRF-TOKEN': '{{ csrf_token() }}'
+                        }
+                    });
+                    
+                    if (!response.ok) return;
+                    
+                    const data = await response.json();
+                    
+                    if (data.messages && data.messages.length > 0) {
+                        data.messages.forEach(msg => {
+                            const exists = this.systemMessages.some(m => m.id === msg.id);
+                            if (!exists) {
+                                this.systemMessages.push(msg);
+                            }
+                        });
+                        this.updateAllMessages();
+                    }
+                } catch (error) {
+                    console.error('System messages polling error:', error);
+                }
+            }, 5000);
         },
 
         // ===== دوال الحذف المؤقت =====
@@ -1634,6 +1733,8 @@ document.addEventListener('alpine:init', () => {
         
         destroy() { 
             if (this.undoTimeout) clearTimeout(this.undoTimeout);
+
+            if (this.pollingTimer) clearInterval(this.pollingTimer);
             
             // ✅ تبليغ السيرفر إنك طلعت
             fetch(`/chat/${roomId}/mark-left`, {

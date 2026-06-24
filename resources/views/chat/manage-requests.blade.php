@@ -7,9 +7,9 @@
                 @if($requests->isEmpty())
                     <p class="text-gray-500 text-center py-8">لا توجد طلبات حالياً.</p>
                 @else
-                    <div class="space-y-4">
+                    <div class="space-y-4" id="requestsList">
                         @foreach($requests as $req)
-                            <div class="glass rounded-2xl p-4 flex items-center justify-between">
+                            <div class="glass rounded-2xl p-4 flex items-center justify-between request-item" data-user="{{ $req->user->name }}">
                                 <div class="flex items-center gap-3">
                                     <div class="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold">
                                         {{ substr($req->user->name, 0, 1) }}
@@ -21,11 +21,11 @@
                                 </div>
                                 <div class="flex gap-2">
                                     @if($req->status === 'pending')
-                                        <form method="POST" action="{{ route('chat.handle-request', [$room->slug, $req->id, 'approve']) }}">
+                                        <form method="POST" action="{{ route('chat.handle-request', [$room->slug, $req->id, 'approve']) }}" class="inline">
                                             @csrf
                                             <button class="px-4 py-2 bg-green-500 text-white rounded-xl hover:bg-green-600 transition">قبول</button>
                                         </form>
-                                        <form method="POST" action="{{ route('chat.handle-request', [$room->slug, $req->id, 'reject']) }}">
+                                        <form method="POST" action="{{ route('chat.handle-request', [$room->slug, $req->id, 'reject']) }}" class="inline">
                                             @csrf
                                             <button class="px-4 py-2 bg-red-500 text-white rounded-xl hover:bg-red-600 transition">رفض</button>
                                         </form>
@@ -45,3 +45,10 @@
         </div>
     </div>
 </x-app-layout>
+
+<script>
+// ✅ Auto-refresh كل 3 ثواني
+setInterval(function() {
+    location.reload();
+}, 3000);
+</script>

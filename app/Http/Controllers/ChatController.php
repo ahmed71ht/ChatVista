@@ -170,14 +170,24 @@ class ChatController extends Controller
                 ->oldest()
                 ->paginate(30);
 
-            // جلب رسائل النظام مع استثناء رسائل انضمام ومغادرة المستخدم الحالي
+            // ✅ جلب رسائل النظام - الكود الجديد
+            $isCreator = Auth::id() === $room->creator_id;
+            
             $systemMessages = \App\Models\SystemMessage::where('room_id', $room->id)
-                ->where(function ($query) {
-                    $query->whereNotIn('type', ['member_joined', 'member_left'])
-                        ->orWhere(function ($q) {
-                            $q->whereIn('type', ['member_joined', 'member_left'])
-                                ->where('data->user_id', '!=', Auth::id());
+                ->where(function ($query) use ($isCreator) {
+                    // join_request: المالك فقط يشوفها
+                    if (!$isCreator) {
+                        $query->where('type', '!=', 'join_request');
+                    }
+                    
+                    // رسائل الانضمام والمغادرة وطلبات الانضمام: ما نشوف رسائلنا
+                    $query->where(function ($q) {
+                        $q->whereNotIn('type', ['member_joined', 'member_left', 'join_request'])
+                        ->orWhere(function ($inner) {
+                            $inner->whereIn('type', ['member_joined', 'member_left', 'join_request'])
+                                    ->where('data->user_id', '!=', Auth::id());
                         });
+                    });
                 })
                 ->oldest()
                 ->get()
@@ -249,14 +259,24 @@ class ChatController extends Controller
             ->oldest()
             ->paginate(30);
 
-        // جلب رسائل النظام مع استثناء رسائل انضمام ومغادرة المستخدم الحالي
+        // ✅ جلب رسائل النظام - الكود الجديد (النسخة الثانية)
+        $isCreator = Auth::id() === $room->creator_id;
+        
         $systemMessages = \App\Models\SystemMessage::where('room_id', $room->id)
-            ->where(function ($query) {
-                $query->whereNotIn('type', ['member_joined', 'member_left'])
-                    ->orWhere(function ($q) {
-                        $q->whereIn('type', ['member_joined', 'member_left'])
-                            ->where('data->user_id', '!=', Auth::id());
+            ->where(function ($query) use ($isCreator) {
+                // join_request: المالك فقط يشوفها
+                if (!$isCreator) {
+                    $query->where('type', '!=', 'join_request');
+                }
+                
+                // رسائل الانضمام والمغادرة وطلبات الانضمام: ما نشوف رسائلنا
+                $query->where(function ($q) {
+                    $q->whereNotIn('type', ['member_joined', 'member_left', 'join_request'])
+                    ->orWhere(function ($inner) {
+                        $inner->whereIn('type', ['member_joined', 'member_left', 'join_request'])
+                                ->where('data->user_id', '!=', Auth::id());
                     });
+                });
             })
             ->oldest()
             ->get()
@@ -267,7 +287,7 @@ class ChatController extends Controller
                     'content' => $msg->content,
                     'created_at' => $msg->created_at->toISOString(),
                     'is_system' => true,
-                    'type' => $msg->type, // <-- مهم: إضافة type
+                    'type' => $msg->type,
                 ];
             });
 
@@ -333,7 +353,82 @@ class ChatController extends Controller
             'status' => 'pending',
         ]);
 
-        return back()->with('success', 'تم إرسال طلب الانضمام إلى مدير الغرفة.');
+        // ✅ حفظ رسالة نظام جديدة - type: join_request
+        \App\Models\SystemMessage::create([
+            'room_id' => $room->id,
+            'type' => 'join_request',
+            'content' => Auth::user()->name . " قدم طلب انضمام إلى غرفة " . $room->name,
+            'data' => [
+                'user_id' => Auth::id(),
+                'user_name' => Auth::user()->name,
+            ],
+        ]);
+
+        // ✅ بث حدث للمالك
+        broadcast(new \App\Events\JoinRequestSubmitted(
+            $room->id,
+            Auth::id(),
+            Auth::user()->name,
+            $room->name
+        ))->toOthers();
+
+        return redirect()->route('chat.room', $room->slug)->with('success', 'تم إرسال طلب الانضمام إلى مدير الغرفة.');
+    }
+
+    public function checkRequests(ChatRoom $room)
+    {
+        if ($room->creator_id !== Auth::id()) {
+            abort(403);
+        }
+
+        $requests = $room->joinRequests()->with('user')->latest()->get()->map(function ($req) {
+            return [
+                'id' => $req->id,
+                'user' => ['name' => $req->user->name],
+                'status' => $req->status,
+                'created_at_human' => $req->created_at->diffForHumans(),
+            ];
+        });
+        
+        return response()->json(['requests' => $requests]);
+    }
+
+    public function checkSystemMessages(ChatRoom $room)
+    {
+        $isCreator = Auth::id() === $room->creator_id;
+        
+        $lastCheck = session('last_system_check_' . $room->id) ?? now()->subMinute();
+        
+        $messages = \App\Models\SystemMessage::where('room_id', $room->id)
+            ->where('created_at', '>', $lastCheck)
+            ->where(function ($query) use ($isCreator) {
+                if (!$isCreator) {
+                    $query->where('type', '!=', 'join_request');
+                }
+                $query->where(function ($q) {
+                    $q->whereNotIn('type', ['member_joined', 'member_left', 'join_request'])
+                    ->orWhere(function ($inner) {
+                        $inner->whereIn('type', ['member_joined', 'member_left', 'join_request'])
+                                ->where('data->user_id', '!=', Auth::id());
+                    });
+                });
+            })
+            ->oldest()
+            ->get()
+            ->map(function ($msg) {
+                return [
+                    'id' => 'system-' . $msg->id,
+                    'user_id' => null,
+                    'content' => $msg->content,
+                    'created_at' => $msg->created_at->toISOString(),
+                    'is_system' => true,
+                    'type' => $msg->type,
+                ];
+            });
+        
+        session(['last_system_check_' . $room->id => now()]);
+        
+        return response()->json(['messages' => $messages]);
     }
 
     public function manageRequests(ChatRoom $room)
@@ -361,11 +456,44 @@ class ChatController extends Controller
             'status' => $action === 'approve' ? 'approved' : 'rejected',
         ]);
 
+        $userName = \App\Models\User::find($joinRequest->user_id)->name;
+
         if ($action === 'approve') {
             $room->approvedMembers()->syncWithoutDetaching([
                 $joinRequest->user_id => ['role' => 'member']
             ]);
+            
+            // إضافة العضو إلى الغرفة
+            $room->members()->syncWithoutDetaching([$joinRequest->user_id => ['role' => 'member']]);
+            
+            // ✅ حفظ رسالة نظام - تم القبول
+            \App\Models\SystemMessage::create([
+                'room_id' => $room->id,
+                'type' => 'member_joined',
+                'content' => "تم قبول دعوى الانضمام، انضم {$userName} إلى غرفة {$room->name}",
+                'data' => [
+                    'user_id' => $joinRequest->user_id,
+                    'user_name' => $userName,
+                ],
+            ]);
+            
+            // ✅ بث حدث member.joined للكل
+            broadcast(new \App\Events\MemberJoined(
+                $room->id,
+                $joinRequest->user_id,
+                $userName,
+                $room->name
+            ))->toOthers();
         }
+
+        // ✅ بث نتيجة الطلب للشخص اللي قدمه (سواء قبول أو رفض)
+        broadcast(new \App\Events\JoinRequestHandled(
+            $room->id,
+            $joinRequest->user_id,
+            $userName,
+            $room->name,
+            $action
+        ))->toOthers();
 
         return back()->with('success', $action === 'approve' ? 'تم قبول العضو.' : 'تم رفض الطلب.');
     }
