@@ -117,12 +117,15 @@ class ChatController extends Controller
     public function show(Request $request, ChatRoom $room)
     {
         $isNewMember = false;
-        
+
         // ✅ تصفير العداد
         \App\Models\UnreadCount::where('user_id', Auth::id())
             ->where('room_id', $room->id)
             ->update(['unread_messages' => 0, 'unread_mentions' => 0]);
-        
+
+        // ✅ بث تصفير العداد للمستخدم عبر WebSocket (يحدّث القائمة في كل التابات)
+        broadcast(new \App\Events\UnreadUpdated($room->id, Auth::id(), 0, 0));
+
         // ✅ تحديث last_read_at فوراً - هذا هو الحل
         if ($room->members->contains(Auth::id())) {
             $room->members()->updateExistingPivot(Auth::id(), ['last_read_at' => now()]);
@@ -159,6 +162,9 @@ class ChatController extends Controller
                     Auth::user()->name,
                     $room->name
                 ))->toOthers();
+
+                // ✅ بث تحديث الغرفة لكل الصفحات (قائمة الغرف) حتى يتحدث عدد الأعضاء
+                broadcast(new \App\Events\RoomUpdated($room));
             }
 
             // تحميل العلاقات
@@ -484,6 +490,9 @@ class ChatController extends Controller
                 $userName,
                 $room->name
             ))->toOthers();
+
+            // ✅ بث تحديث الغرفة لكل الصفحات (قائمة الغرف) حتى يتحدث عدد الأعضاء
+            broadcast(new \App\Events\RoomUpdated($room));
         }
 
         // ✅ بث نتيجة الطلب للشخص اللي قدمه (سواء قبول أو رفض)
@@ -509,6 +518,9 @@ class ChatController extends Controller
         }
 
         $room->members()->syncWithoutDetaching([Auth::id() => ['role' => 'member']]);
+
+        // ✅ بث تحديث الغرفة لكل الصفحات (قائمة الغرف) حتى يتحدث عدد الأعضاء
+        broadcast(new \App\Events\RoomUpdated($room));
 
         return redirect()->route('chat.room', $room->slug);
     }
@@ -562,6 +574,9 @@ class ChatController extends Controller
             $roomName
         ))->toOthers();
 
+        // ✅ بث تحديث الغرفة لكل الصفحات (قائمة الغرف) حتى يتحدث عدد الأعضاء
+        broadcast(new \App\Events\RoomUpdated($room));
+
         // بث حدث إزالة الغرفة من قائمة محادثاتي للمستخدم (بدون toOthers عشان يوصل للمستخدم نفسه)
         broadcast(new \App\Events\RoomLeft(
             $room->id,
@@ -607,25 +622,34 @@ class ChatController extends Controller
 
         foreach ($allMembers as $member) {
             $isAbsent = !$member->pivot->last_read_at;
-            
+
             if ($isAbsent) {
                 $unread = \App\Models\UnreadCount::firstOrCreate(
                     ['user_id' => $member->id, 'room_id' => $room->id],
                     ['unread_messages' => 0, 'unread_mentions' => 0]
                 );
                 $unread->increment('unread_messages');
-                
+
                 if (in_array($member->id, $mentionedUserIds)) {
                     $unread->increment('unread_mentions');
                 }
+
+                // ✅ بث تحديث العداد لهذا العضو عبر WebSocket فقط
+                $unread->refresh();
+                broadcast(new \App\Events\UnreadUpdated(
+                    $room->id,
+                    $member->id,
+                    $unread->unread_messages,
+                    $unread->unread_mentions
+                ));
             }
         }
 
         $message->load(['user', 'reactions', 'parent.user']);
         broadcast(new MessageSent($message))->toOthers();
-        
-        // ✅ بث تحديث الغرفة
-        broadcast(new \App\Events\RoomUpdated($room))->toOthers();
+
+        // ✅ بث تحديث الغرفة (بدون toOthers حتى المرسل يشوف آخر رسالة محدثة في القائمة)
+        broadcast(new \App\Events\RoomUpdated($room));
 
         return response()->json(['message' => $message]);
     }

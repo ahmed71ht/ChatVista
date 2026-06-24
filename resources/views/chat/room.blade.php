@@ -944,28 +944,6 @@ document.addEventListener('alpine:init', () => {
                         }
                     }
                 });
-            
-            window.Echo.channel('rooms')
-                .listen('.room.updated', (e) => {
-                    console.log('📢 Room Updated:', e); // ✅ أضف هذا
-                    
-                    const room = this.rooms.find(r => r.id === e.room.id);
-                    if (room) {
-                        console.log('✅ Found room, updating...'); // ✅ أضف هذا
-                        
-                        room.messages = e.room.messages;
-                        room.members_count = e.room.members_count;
-                        
-                        if (!this.isMyRooms) return;
-                        
-                        fetch(`/api/rooms/${room.id}/unread`)
-                            .then(res => res.json())
-                            .then(data => {
-                                room.unread_messages = data.unread_messages;
-                                room.unread_mentions = data.unread_mentions;
-                            });
-                    }
-                });
 
             window.addEventListener('undo-delete', () => {
                 if (this.deletedMessage) this.undoDelete();
