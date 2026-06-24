@@ -239,19 +239,19 @@
                             .listen('.room.updated', (e) => {
                                 const room = this.rooms.find(r => r.id === e.room.id);
                                 if (room) {
+                                    // ✅ آخر رسالة وعدد الأعضاء عبر WebSocket مباشرة
                                     room.messages = e.room.messages;
                                     room.members_count = e.room.members_count;
-                                    
-                                    // إذا مش بالـ my rooms
-                                    if (!this.isMyRooms) return;
-                                    
-                                    // جلب العدادات من السيرفر
-                                    fetch(`/api/rooms/${room.id}/unread`)
-                                        .then(res => res.json())
-                                        .then(data => {
-                                            room.unread_messages = data.unread_messages;
-                                            room.unread_mentions = data.unread_mentions;
-                                        });
+                                }
+                            });
+
+                        // ✅ عدّادات الرسائل غير المقروءة عبر WebSocket فقط (قناة خاصة بالمستخدم)
+                        window.Echo.private(`user.{{ Auth::id() }}`)
+                            .listen('.unread.updated', (e) => {
+                                const room = this.rooms.find(r => r.id === e.roomId);
+                                if (room) {
+                                    room.unread_messages = e.unreadMessages;
+                                    room.unread_mentions = e.unreadMentions;
                                 }
                             });
                         // اشترك في قناة المستخدم الحالي

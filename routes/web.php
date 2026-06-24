@@ -69,7 +69,7 @@ Route::middleware('auth')->group(function () {
 
 Route::get('/api/users/search', [ChatController::class, 'searchUsers'])->name('api.users.search');
 
-Route::get('/api/rooms/{room}/unread', [ChatController::class, 'getUnreadCounts'])->name('api.rooms.unread');
+Route::get('/api/rooms/{room:id}/unread', [ChatController::class, 'getUnreadCounts'])->name('api.rooms.unread');
 
 Route::post('/chat/{room:slug}/mark-left', [ChatController::class, 'markLeft']);
 
